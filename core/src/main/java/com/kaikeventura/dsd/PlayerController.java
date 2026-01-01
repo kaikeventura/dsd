@@ -2,20 +2,21 @@ package com.kaikeventura.dsd;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
-import com.badlogic.gdx.graphics.PerspectiveCamera;
+import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.physics.bullet.dynamics.btRigidBody;
 
 public class PlayerController {
 
     private final btRigidBody playerBody;
-    private final PerspectiveCamera camera;
+    private final Camera camera;
     private final Vector3 walkDirection = new Vector3();
     private final Vector3 tempVector = new Vector3();
     private final float speed = 5.0f;
     private final float jumpForce = 7.0f;
 
-    public PlayerController(btRigidBody playerBody, PerspectiveCamera camera) {
+    public PlayerController(btRigidBody playerBody, Camera camera) {
         this.playerBody = playerBody;
         this.camera = camera;
     }
@@ -23,16 +24,12 @@ public class PlayerController {
     public void update(float delta) {
         // --- ROTAÇÃO ---
         // O jogador irá rotacionar para sempre olhar na mesma direção da câmera.
-        // Pegamos a rotação da câmera e aplicamos ao corpo físico.
-        camera.update(); // Garante que a matriz da câmera está atualizada
-        playerBody.setWorldTransform(playerBody.getWorldTransform().setFromEulerAngles(0, camera.direction.y, 0));
+        Vector3 cameraDirection = tempVector.set(camera.direction).set(camera.direction.x, 0, camera.direction.z).nor();
+        playerBody.getWorldTransform().setFromEulerAngles(0, (float)Math.atan2(cameraDirection.x, cameraDirection.z) * MathUtils.radiansToDegrees, 0);
 
 
         // --- MOVIMENTAÇÃO (Frente/Trás e Strafe) ---
         walkDirection.set(0, 0, 0); // Reseta o vetor de direção a cada quadro
-
-        // Pega a direção da câmera no plano XZ (horizontal)
-        Vector3 cameraDirection = tempVector.set(camera.direction).set(camera.direction.x, 0, camera.direction.z).nor();
 
         if (Gdx.input.isKeyPressed(Input.Keys.W)) {
             walkDirection.add(cameraDirection);
@@ -42,7 +39,7 @@ public class PlayerController {
         }
 
         // Para o "strafe", pegamos o vetor "direita" da câmera (produto vetorial da direção com o vetor "para cima")
-        Vector3 strafeDirection = tempVector.set(camera.direction).crs(camera.up).nor();
+        Vector3 strafeDirection = tempVector.set(camera.direction).crs(camera.up).set(tempVector.x, 0, tempVector.z).nor();
 
         if (Gdx.input.isKeyPressed(Input.Keys.D)) {
             walkDirection.add(strafeDirection);
