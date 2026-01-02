@@ -28,6 +28,8 @@ import com.badlogic.gdx.physics.bullet.collision.*;
 import com.badlogic.gdx.physics.bullet.dynamics.*;
 import com.badlogic.gdx.physics.bullet.linearmath.btIDebugDraw;
 import com.badlogic.gdx.physics.bullet.linearmath.btMotionState;
+import com.badlogic.gdx.utils.viewport.FitViewport;
+import com.badlogic.gdx.utils.viewport.Viewport;
 import net.mgsx.gltf.loaders.glb.GLBLoader;
 import net.mgsx.gltf.scene3d.scene.SceneAsset;
 
@@ -58,6 +60,7 @@ public class GameScreen implements Screen {
     TextureRegion fboRegion;
     final int VIRTUAL_WIDTH = 320;
     final int VIRTUAL_HEIGHT = 240;
+    Viewport viewport; // Viewport para manter a proporção na tela cheia
 
     // Lógica do Jogador
     PlayerController playerController;
@@ -137,12 +140,8 @@ public class GameScreen implements Screen {
         loadAndAppendAnimation("knight-walk.glb", "walk_fwd");
         loadAndAppendAnimation("knight-walk-back.glb", "walk_back");
         loadAndAppendAnimation("knight-walk-left.glb", "walk_left");
-        loadAndAppendAnimation("knight-walk-right.glb", "walk_right"); // Corrigido nome do arquivo
+        loadAndAppendAnimation("knight-walk-right.glb", "walk_right");
         loadAndAppendAnimation("knight-jump.glb", "jump");
-
-        // Mantendo as antigas por compatibilidade se necessário, ou removendo se não usar mais
-        // loadAndAppendAnimation("knight_run.glb", "run");
-        // loadAndAppendAnimation("knight_attack.glb", "attack");
 
         // 4. ANIMAÇÃO
         animationController = new AnimationController(playerInstance);
@@ -156,6 +155,9 @@ public class GameScreen implements Screen {
         // 5. SISTEMA DE PIXELS (PS1)
         spriteBatch = new SpriteBatch();
         fbo = new FrameBuffer(Pixmap.Format.RGB565, VIRTUAL_WIDTH, VIRTUAL_HEIGHT, true);
+
+        // Inicializa o Viewport para manter a proporção 320x240 na tela cheia
+        viewport = new FitViewport(VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
 
         // 6. CONFIGURAÇÃO DA FÍSICA
         collisionConfig = new btDefaultCollisionConfiguration();
@@ -246,42 +248,27 @@ public class GameScreen implements Screen {
             animToPlay = "walk_right";
         }
 
-        // Só troca se for diferente da atual (ou se for jump que pode precisar reiniciar se a lógica permitir, mas aqui evitamos spam)
-        // Para jump, talvez queiramos permitir reiniciar se já acabou, mas por enquanto vamos manter simples.
         if (!currentAnimationId.equals(animToPlay)) {
-            // Se for jump, usamos transição mais rápida ou nula para resposta imediata
             float transitionTime = animToPlay.equals("jump") ? 0.1f : 0.2f;
-
             animationController.animate(animToPlay, loopCount, 1f, null, transitionTime);
             currentAnimationId = animToPlay;
         }
 
-        // Se a animação for "jump" e terminar, precisamos voltar para idle ou walk?
-        // O AnimationController com listener resolveria isso, mas na forma simples:
         if (currentAnimationId.equals("jump") && animationController.current != null && animationController.current.time >= animationController.current.duration) {
-             // Pulo acabou, reseta ID para permitir nova lógica no próximo frame
-             // Na verdade, o animate com listener seria melhor, mas aqui vamos deixar o loop de render decidir no proximo frame
-             // Se soltar o espaço, ele vai cair no idle/walk. Se segurar, vai tentar pular de novo (loopCount=1 impede loop automatico)
-             // Vamos forçar reset do ID se a animação acabou visualmente
              if (animationController.current.loopCount == 1) {
-                 // Hack simples: se acabou, libera para trocar
                  currentAnimationId = "";
              }
         }
 
-        // Atualiza a animação com o delta time
         animationController.update(Gdx.graphics.getDeltaTime());
-
-        // Simulação da física
         dynamicsWorld.stepSimulation(delta, 5, 1f / 60f);
 
-        // Sincronização Física-Visual
         playerBody.getWorldTransform(playerInstance.transform);
         playerInstance.transform.translate(offsetX, offsetY, offsetZ);
-        playerInstance.transform.rotate(Vector3.Y, 180f); // Rotação de 180 graus para corrigir a orientação
+        playerInstance.transform.rotate(Vector3.Y, 180f);
         playerInstance.transform.scale(modelScale, modelScale, modelScale);
 
-        // Renderização
+        // Renderização no FBO (320x240)
         fbo.begin();
         Gdx.gl.glViewport(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
         Gdx.gl.glClearColor(0.05f, 0.05f, 0.05f, 1);
@@ -298,20 +285,25 @@ public class GameScreen implements Screen {
 
         fbo.end();
 
-        // Desenha na tela grande
-        Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        // Desenha na tela grande usando o Viewport para corrigir a proporção
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+
+        viewport.apply(); // Aplica o viewport (define glViewport e câmera 2D)
 
         fboRegion = new TextureRegion(fbo.getColorBufferTexture());
         fboRegion.flip(false, true);
 
+        spriteBatch.setProjectionMatrix(viewport.getCamera().combined); // Usa a matriz do viewport
         spriteBatch.begin();
-        spriteBatch.draw(fboRegion, 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        // Desenha ocupando todo o mundo virtual do viewport (320x240)
+        spriteBatch.draw(fboRegion, 0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
         spriteBatch.end();
     }
 
     @Override
     public void resize(int width, int height) {
+        // Atualiza o viewport quando a janela muda de tamanho
+        viewport.update(width, height, true); // true centraliza a câmera
     }
 
     @Override
@@ -334,7 +326,6 @@ public class GameScreen implements Screen {
         modelBatch.dispose();
         playerModel.dispose();
 
-        // Dispose dos modelos extras
         for (Model m : animationModels) {
             m.dispose();
         }
