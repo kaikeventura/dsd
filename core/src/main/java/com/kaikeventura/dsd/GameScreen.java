@@ -15,6 +15,7 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
+import com.badlogic.gdx.graphics.g3d.model.Node;
 import com.badlogic.gdx.graphics.g3d.shaders.DefaultShader;
 import com.badlogic.gdx.graphics.g3d.utils.AnimationController;
 import com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider;
@@ -44,15 +45,22 @@ public class GameScreen implements Screen {
     public Environment environment;
 
     // Modelos
-    public Model playerModel, groundModel;
+    public Model playerModel, groundModel, swordModel;
     // Lista para guardar referências e dar dispose depois
     private List<Model> animationModels = new ArrayList<>();
 
-    public ModelInstance playerInstance, groundInstance;
+    public ModelInstance playerInstance, groundInstance, swordInstance;
+    private Node handNode;
+
+    // Variáveis de Calibração da Espada
+    private float swordScale = 1.0f;
+    private float rotX = 0, rotY = 0, rotZ = 0;
+    private float posX = 0, posY = 0, posZ = 0;
 
     // Animação
     private AnimationController animationController;
     private String currentAnimationId = "";
+    private boolean isAttacking = false;
 
     // PS1 Rendering
     FrameBuffer fbo;
@@ -142,6 +150,29 @@ public class GameScreen implements Screen {
         loadAndAppendAnimation("knight-walk-left.glb", "walk_left");
         loadAndAppendAnimation("knight-walk-right.glb", "walk_right");
         loadAndAppendAnimation("knight-jump.glb", "jump");
+        loadAndAppendAnimation("knight_attack.glb", "attack");
+
+        // Carrega a Espada
+        try {
+            SceneAsset swordAsset = new GLBLoader().load(Gdx.files.internal("sword.glb"));
+            swordModel = swordAsset.scene.model;
+            swordInstance = new ModelInstance(swordModel);
+        } catch (Exception e) {
+            System.err.println("Erro ao carregar sword.glb: " + e.getMessage());
+        }
+
+        // Procura o osso da mão
+        handNode = playerInstance.getNode("mixamo.com:RightHand", true);
+        if (handNode == null) {
+            handNode = playerInstance.getNode("RightHand", true); // Tenta nome alternativo
+        }
+        if (handNode == null) {
+            System.out.println("ERRO CRÍTICO: Nó da mão não encontrado no modelo!");
+            // Lista nós para debug se necessário
+            // for(Node n : playerInstance.nodes) System.out.println(n.id);
+        } else {
+            System.out.println("Sucesso: Nó da mão encontrado: " + handNode.id);
+        }
 
         // 4. ANIMAÇÃO
         animationController = new AnimationController(playerInstance);
@@ -227,37 +258,88 @@ public class GameScreen implements Screen {
 
     @Override
     public void render(float delta) {
-        // Atualiza os controllers
-        playerController.update(delta);
+        // Atualiza a câmera sempre
         cameraController.update(delta);
 
-        // Lógica de Animação (Prioridade)
-        String animToPlay = "idle";
-        int loopCount = -1; // Infinito por padrão
+        // --- DEBUG DE CALIBRAÇÃO DA ESPADA ---
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_1)) rotX += 1f;
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_2)) rotX -= 1f;
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_3)) rotY += 1f;
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_4)) rotY -= 1f;
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_5)) rotZ += 1f;
+        if (Gdx.input.isKeyPressed(Input.Keys.NUM_6)) rotZ -= 1f;
 
-        if (Gdx.input.isKeyPressed(Input.Keys.SPACE)) {
-            animToPlay = "jump";
-            loopCount = 1; // Toca uma vez
-        } else if (Gdx.input.isKeyPressed(Input.Keys.W)) {
-            animToPlay = "walk_fwd";
-        } else if (Gdx.input.isKeyPressed(Input.Keys.S)) {
-            animToPlay = "walk_back";
-        } else if (Gdx.input.isKeyPressed(Input.Keys.A)) {
-            animToPlay = "walk_left";
-        } else if (Gdx.input.isKeyPressed(Input.Keys.D)) {
-            animToPlay = "walk_right";
+        if (Gdx.input.isKeyPressed(Input.Keys.UP)) posY += 0.01f;
+        if (Gdx.input.isKeyPressed(Input.Keys.DOWN)) posY -= 0.01f;
+        if (Gdx.input.isKeyPressed(Input.Keys.LEFT)) posX -= 0.01f;
+        if (Gdx.input.isKeyPressed(Input.Keys.RIGHT)) posX += 0.01f;
+        if (Gdx.input.isKeyPressed(Input.Keys.O)) posZ -= 0.01f;
+        if (Gdx.input.isKeyPressed(Input.Keys.P)) posZ += 0.01f;
+
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+            System.out.println("CALIBRAÇÃO ATUAL: ");
+            System.out.println("Rot: " + rotX + ", " + rotY + ", " + rotZ);
+            System.out.println("Pos: " + posX + ", " + posY + ", " + posZ);
         }
+        // -------------------------------------
 
-        if (!currentAnimationId.equals(animToPlay)) {
-            float transitionTime = animToPlay.equals("jump") ? 0.1f : 0.2f;
-            animationController.animate(animToPlay, loopCount, 1f, null, transitionTime);
-            currentAnimationId = animToPlay;
-        }
+        // Lógica de Ataque e Movimento
+        if (!isAttacking) {
+            // Só permite mover se não estiver atacando
+            playerController.update(delta);
 
-        if (currentAnimationId.equals("jump") && animationController.current != null && animationController.current.time >= animationController.current.duration) {
-             if (animationController.current.loopCount == 1) {
-                 currentAnimationId = "";
-             }
+            // Verifica se quer atacar
+            if (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
+                isAttacking = true;
+                currentAnimationId = "attack";
+
+                // Para o movimento físico ao atacar
+                playerBody.setLinearVelocity(new Vector3(0, playerBody.getLinearVelocity().y, 0));
+
+                animationController.animate("attack", 1, 1f, new AnimationController.AnimationListener() {
+                    @Override
+                    public void onEnd(AnimationController.AnimationDesc animation) {
+                        isAttacking = false;
+                        // Volta para idle suavemente
+                        animationController.animate("idle", -1, 1f, null, 0.2f);
+                        currentAnimationId = "idle";
+                    }
+
+                    @Override
+                    public void onLoop(AnimationController.AnimationDesc animation) {
+                    }
+                }, 0.1f);
+            } else {
+                // Lógica de Animação de Movimento (Prioridade)
+                String animToPlay = "idle";
+                int loopCount = -1; // Infinito por padrão
+
+                if (Gdx.input.isKeyPressed(Input.Keys.SPACE)) {
+                    animToPlay = "jump";
+                    loopCount = 1; // Toca uma vez
+                } else if (Gdx.input.isKeyPressed(Input.Keys.W)) {
+                    animToPlay = "walk_fwd";
+                } else if (Gdx.input.isKeyPressed(Input.Keys.S)) {
+                    animToPlay = "walk_back";
+                } else if (Gdx.input.isKeyPressed(Input.Keys.A)) {
+                    animToPlay = "walk_left";
+                } else if (Gdx.input.isKeyPressed(Input.Keys.D)) {
+                    animToPlay = "walk_right";
+                }
+
+                if (!currentAnimationId.equals(animToPlay)) {
+                    float transitionTime = animToPlay.equals("jump") ? 0.1f : 0.2f;
+                    animationController.animate(animToPlay, loopCount, 1f, null, transitionTime);
+                    currentAnimationId = animToPlay;
+                }
+
+                // Reset de pulo se necessário
+                if (currentAnimationId.equals("jump") && animationController.current != null && animationController.current.time >= animationController.current.duration) {
+                     if (animationController.current.loopCount == 1) {
+                         currentAnimationId = "";
+                     }
+                }
+            }
         }
 
         animationController.update(Gdx.graphics.getDeltaTime());
@@ -268,6 +350,18 @@ public class GameScreen implements Screen {
         playerInstance.transform.rotate(Vector3.Y, 180f);
         playerInstance.transform.scale(modelScale, modelScale, modelScale);
 
+        // --- ATUALIZAÇÃO DA ESPADA ---
+        if (swordInstance != null && handNode != null) {
+            swordInstance.transform.set(playerInstance.transform);
+            swordInstance.transform.mul(handNode.globalTransform);
+
+            swordInstance.transform.rotate(Vector3.X, rotX);
+            swordInstance.transform.rotate(Vector3.Y, rotY);
+            swordInstance.transform.rotate(Vector3.Z, rotZ);
+            swordInstance.transform.translate(posX, posY, posZ);
+            swordInstance.transform.scale(swordScale, swordScale, swordScale);
+        }
+
         // Renderização no FBO (320x240)
         fbo.begin();
         Gdx.gl.glViewport(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
@@ -276,6 +370,7 @@ public class GameScreen implements Screen {
 
         modelBatch.begin(cam);
         modelBatch.render(playerInstance, environment);
+        if (swordInstance != null) modelBatch.render(swordInstance, environment); // Renderiza a espada
         modelBatch.render(groundInstance, environment);
         modelBatch.end();
 
@@ -325,6 +420,7 @@ public class GameScreen implements Screen {
     public void dispose() {
         modelBatch.dispose();
         playerModel.dispose();
+        if (swordModel != null) swordModel.dispose();
 
         for (Model m : animationModels) {
             m.dispose();
