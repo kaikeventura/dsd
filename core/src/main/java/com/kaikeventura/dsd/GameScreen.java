@@ -31,6 +31,9 @@ import com.badlogic.gdx.physics.bullet.linearmath.btMotionState;
 import net.mgsx.gltf.loaders.glb.GLBLoader;
 import net.mgsx.gltf.scene3d.scene.SceneAsset;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class GameScreen implements Screen {
 
     // 3D Engine
@@ -40,7 +43,9 @@ public class GameScreen implements Screen {
 
     // Modelos
     public Model playerModel, groundModel;
-    public Model runModel, attackModel; // Modelos adicionais para animações
+    // Lista para guardar referências e dar dispose depois
+    private List<Model> animationModels = new ArrayList<>();
+
     public ModelInstance playerInstance, groundInstance;
 
     // Animação
@@ -128,15 +133,16 @@ public class GameScreen implements Screen {
             playerInstance.animations.get(0).id = "idle";
         }
 
-        // Carrega Run e faz o Retargeting
-        SceneAsset runAsset = new GLBLoader().load(Gdx.files.internal("knight_run.glb"));
-        runModel = runAsset.scene.model;
-        addAndRetargetAnimation(runModel, "run");
+        // Carrega Animações Extras com Retargeting
+        loadAndAppendAnimation("knight-walk.glb", "walk_fwd");
+        loadAndAppendAnimation("knight-walk-back.glb", "walk_back");
+        loadAndAppendAnimation("knight-walk-left.glb", "walk_left");
+        loadAndAppendAnimation("knight-walk-right.glb", "walk_right"); // Corrigido nome do arquivo
+        loadAndAppendAnimation("knight-jump.glb", "jump");
 
-        // Carrega Attack e faz o Retargeting
-        SceneAsset attackAsset = new GLBLoader().load(Gdx.files.internal("knight_attack.glb"));
-        attackModel = attackAsset.scene.model;
-        addAndRetargetAnimation(attackModel, "attack");
+        // Mantendo as antigas por compatibilidade se necessário, ou removendo se não usar mais
+        // loadAndAppendAnimation("knight_run.glb", "run");
+        // loadAndAppendAnimation("knight_attack.glb", "attack");
 
         // 4. ANIMAÇÃO
         animationController = new AnimationController(playerInstance);
@@ -190,20 +196,30 @@ public class GameScreen implements Screen {
         cameraController = new ThirdPersonCameraController(cam, playerInstance);
     }
 
-    // Método Mágico para corrigir as animações
-    private void addAndRetargetAnimation(Model sourceModel, String animId) {
-        for (com.badlogic.gdx.graphics.g3d.model.Animation anim : sourceModel.animations) {
-            anim.id = animId;
+    // Método auxiliar para carregar e fazer retargeting
+    private void loadAndAppendAnimation(String fileName, String internalName) {
+        try {
+            SceneAsset asset = new GLBLoader().load(Gdx.files.internal(fileName));
+            Model model = asset.scene.model;
+            animationModels.add(model); // Guarda para dispose
 
-            // Retargeting: Atualiza os nós da animação para apontar para os nós da instância do jogador
-            for (com.badlogic.gdx.graphics.g3d.model.NodeAnimation nodeAnim : anim.nodeAnimations) {
-                com.badlogic.gdx.graphics.g3d.model.Node targetNode = playerInstance.getNode(nodeAnim.node.id, true);
-                if (targetNode != null) {
-                    nodeAnim.node = targetNode;
+            if (model.animations.size > 0) {
+                com.badlogic.gdx.graphics.g3d.model.Animation anim = model.animations.get(0);
+                anim.id = internalName;
+
+                // Retargeting
+                for (com.badlogic.gdx.graphics.g3d.model.NodeAnimation nodeAnim : anim.nodeAnimations) {
+                    com.badlogic.gdx.graphics.g3d.model.Node targetNode = playerInstance.getNode(nodeAnim.node.id, true);
+                    if (targetNode != null) {
+                        nodeAnim.node = targetNode;
+                    }
                 }
+                playerInstance.animations.add(anim);
+                System.out.println("Animação carregada: " + internalName + " de " + fileName);
             }
-            playerInstance.animations.add(anim);
-            System.out.println("Animação adicionada e redirecionada: " + animId);
+        } catch (Exception e) {
+            System.err.println("Erro ao carregar animação: " + fileName);
+            e.printStackTrace();
         }
     }
 
@@ -213,21 +229,44 @@ public class GameScreen implements Screen {
         playerController.update(delta);
         cameraController.update(delta);
 
-        // Lógica de Animação
-        boolean movingNow = Gdx.input.isKeyPressed(Input.Keys.W) || Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.S) || Gdx.input.isKeyPressed(Input.Keys.D);
+        // Lógica de Animação (Prioridade)
+        String animToPlay = "idle";
+        int loopCount = -1; // Infinito por padrão
 
-        if (movingNow) {
-            if (!currentAnimationId.equals("run")) {
-                System.out.println("Trocando para RUN");
-                animationController.animate("run", -1, 1f, null, 0.2f);
-                currentAnimationId = "run";
-            }
-        } else {
-            if (!currentAnimationId.equals("idle")) {
-                System.out.println("Trocando para IDLE");
-                animationController.animate("idle", -1, 1f, null, 0.2f);
-                currentAnimationId = "idle";
-            }
+        if (Gdx.input.isKeyPressed(Input.Keys.SPACE)) {
+            animToPlay = "jump";
+            loopCount = 1; // Toca uma vez
+        } else if (Gdx.input.isKeyPressed(Input.Keys.W)) {
+            animToPlay = "walk_fwd";
+        } else if (Gdx.input.isKeyPressed(Input.Keys.S)) {
+            animToPlay = "walk_back";
+        } else if (Gdx.input.isKeyPressed(Input.Keys.A)) {
+            animToPlay = "walk_left";
+        } else if (Gdx.input.isKeyPressed(Input.Keys.D)) {
+            animToPlay = "walk_right";
+        }
+
+        // Só troca se for diferente da atual (ou se for jump que pode precisar reiniciar se a lógica permitir, mas aqui evitamos spam)
+        // Para jump, talvez queiramos permitir reiniciar se já acabou, mas por enquanto vamos manter simples.
+        if (!currentAnimationId.equals(animToPlay)) {
+            // Se for jump, usamos transição mais rápida ou nula para resposta imediata
+            float transitionTime = animToPlay.equals("jump") ? 0.1f : 0.2f;
+
+            animationController.animate(animToPlay, loopCount, 1f, null, transitionTime);
+            currentAnimationId = animToPlay;
+        }
+
+        // Se a animação for "jump" e terminar, precisamos voltar para idle ou walk?
+        // O AnimationController com listener resolveria isso, mas na forma simples:
+        if (currentAnimationId.equals("jump") && animationController.current != null && animationController.current.time >= animationController.current.duration) {
+             // Pulo acabou, reseta ID para permitir nova lógica no próximo frame
+             // Na verdade, o animate com listener seria melhor, mas aqui vamos deixar o loop de render decidir no proximo frame
+             // Se soltar o espaço, ele vai cair no idle/walk. Se segurar, vai tentar pular de novo (loopCount=1 impede loop automatico)
+             // Vamos forçar reset do ID se a animação acabou visualmente
+             if (animationController.current.loopCount == 1) {
+                 // Hack simples: se acabou, libera para trocar
+                 currentAnimationId = "";
+             }
         }
 
         // Atualiza a animação com o delta time
@@ -294,8 +333,13 @@ public class GameScreen implements Screen {
     public void dispose() {
         modelBatch.dispose();
         playerModel.dispose();
-        if (runModel != null) runModel.dispose();
-        if (attackModel != null) attackModel.dispose();
+
+        // Dispose dos modelos extras
+        for (Model m : animationModels) {
+            m.dispose();
+        }
+        animationModels.clear();
+
         groundModel.dispose();
         fbo.dispose();
         spriteBatch.dispose();
